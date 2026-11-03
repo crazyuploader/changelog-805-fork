@@ -1,0 +1,144 @@
+# Shared prereleaser. Opens or refreshes the release PR `chore(release): vX.Y.Z`.
+# Run by hand to open it. On every push to main, run with refresh: true to rebuild an open one.
+name: prereleaser
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to release, such as v0.149.0. Empty: changelog next picks it.'
+        required: false
+        default: ''
+        type: string
+      refresh:
+        description: 'Rebuild the open release PR from main instead of opening a new one.'
+        required: false
+        default: false
+        type: boolean
+      prepare-command:
+        description: 'Repo step after changelog update, such as hack/release.sh prepare. Gets VERSION.'
+        required: false
+        default: ''
+        type: string
+      changelog-repo:
+        description: 'Repo of the changelog tool.'
+        required: false
+        default: 'SigNoz/changelog'
+        type: string
+      changelog-version:
+        description: 'Tag or commit SHA of the changelog tool.'
+        required: true
+        type: string
+      config:
+        required: false
+        default: '.chloggen/config.yaml'
+        type: string
+      base-branch:
+        required: false
+        default: 'main'
+        type: string
+    secrets:
+      token:
+        description: 'primus-bot token. Without it, GITHUB_TOKEN is used and the PR does not start other workflows.'
+        required: false
+
+permissions: {}
+
+concurrency:
+  group: prereleaser-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+      CONFIG: ${{ inputs.config }}
+      BASE: ${{ inputs.base-branch }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.base-branch }}
+          fetch-depth: 0
+          token: ${{ secrets.token || github.token }}
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.changelog-repo }}
+          ref: ${{ inputs.changelog-version }}
+          path: .changelog-tool
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .changelog-tool/go.mod
+          cache: false
+
+      - name: install
+        run: |
+          go -C .changelog-tool build -o "$RUNNER_TEMP/bin/changelog" .
+          rm -rf .changelog-tool
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          REFRESH: ${{ inputs.refresh }}
+        run: |
+          set -euo pipefail
+          open=$(gh pr list --state open --base "$BASE" --label skip-changelog --json number,title \
+            --jq '[.[] | select(.title | startswith("chore(release): "))][0] // empty')
+          if [[ "$REFRESH" == "true" ]]; then
+            if [[ -z "$open" ]]; then echo "No open release PR. Nothing to refresh."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+            version=$(jq -r '.title | sub("^chore\\(release\\): "; "")' <<< "$open")
+          else
+            if [[ -n "$open" ]]; then echo "Release PR #$(jq -r .number <<< "$open") is open. Merge or close it first."; exit 1; fi
+            version="${INPUT_VERSION:-$(changelog --config "$CONFIG" next)}"
+          fi
+          if git rev-parse -q --verify "refs/tags/${version}" > /dev/null; then
+            echo "Tag ${version} already exists. Pick another version."; exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: update
+        if: ${{ steps.version.outputs.skip != 'true' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREPARE: ${{ inputs.prepare-command }}
+        run: |
+          set -euo pipefail
+          changelog --config "$CONFIG" docs-check
+          changelog --config "$CONFIG" update --version "$VERSION"
+          if [[ -n "$PREPARE" ]]; then bash -c "$PREPARE"; fi
+
+      - name: open-pr
+        if: ${{ steps.version.outputs.skip != 'true' }}
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          REFRESH: ${{ inputs.refresh }}
+        run: |
+          set -euo pipefail
+          git config user.name "primus-bot"
+          git config user.email "primus-bot@users.noreply.github.com"
+          git checkout -B "release/${VERSION}"
+          git add -A
+          git commit -m "chore(release): ${VERSION}"
+          # Force: a refresh rebuilds the branch from main. The ruleset dismisses stale approvals.
+          git push --force origin "release/${VERSION}"
+          if [[ "$REFRESH" == "true" ]]; then echo "Refreshed the release PR for ${VERSION}."; exit 0; fi
+          cat > "$RUNNER_TEMP/body.md" <<BODY
+          Writes the ${VERSION} section of CHANGELOG.md from the pending entries and deletes them.
+
+          To change the notes, edit the entry files in a PR on ${BASE}. This PR rebuilds when it merges.
+
+          - [ ] Weak notes rewritten: each says what users saw, what changed and what to do
+          - [ ] Security fixes have \`security: true\`
+          - [ ] Minimum versions of other SigNoz services or tools are named
+          - [ ] Mandatory upgrade stop: \`upgrade_stop: true\` set and the docs owner tagged (guide + upgradeSchema.json)
+          BODY
+          gh pr create --base "$BASE" --head "release/${VERSION}" --title "chore(release): ${VERSION}" \
+            --label skip-changelog --body-file "$RUNNER_TEMP/body.md"

@@ -1,0 +1,80 @@
+# Shared PR check. Goes in SigNoz/primus.workflows. Each repo calls it (see examples/).
+name: changelog-check
+
+on:
+  workflow_call:
+    inputs:
+      changelog-repo:
+        description: 'Repo of the changelog tool.'
+        required: false
+        default: 'SigNoz/changelog'
+        type: string
+      changelog-version:
+        description: 'Tag or commit SHA of the changelog tool.'
+        required: true
+        type: string
+      config:
+        description: 'Path to the repo changelog config.'
+        required: false
+        default: '.chloggen/config.yaml'
+        type: string
+      skip-actors:
+        description: 'Comma-separated actors that need no entry.'
+        required: false
+        default: 'dependabot[bot],renovate[bot]'
+        type: string
+
+permissions: {}
+
+jobs:
+  changelog:
+    name: changelog
+    runs-on: ubuntu-latest
+    # In a merge queue the job is skipped, which counts as a pass. The PR already passed.
+    if: ${{ github.event_name == 'pull_request' && !contains(format(',{0},', inputs.skip-actors), format(',{0},', github.actor)) }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      CONFIG: ${{ inputs.config }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.changelog-repo }}
+          ref: ${{ inputs.changelog-version }}
+          path: .changelog-tool
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .changelog-tool/go.mod
+          cache: false
+
+      - name: install
+        run: |
+          go -C .changelog-tool build -o "$RUNNER_TEMP/bin/changelog" .
+          rm -rf .changelog-tool
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BASE_REF: ${{ github.base_ref }}
+        run: changelog --config "$CONFIG" check --pr "$PR_NUMBER" --title "$PR_TITLE" --labels "$PR_LABELS" --base "origin/${BASE_REF}"
+
+      - name: preview
+        if: ${{ always() }}
+        run: |
+          {
+            echo '## Release notes preview'
+            echo
+            changelog --config "$CONFIG" update --dry --version next 2>&1 || true
+          } >> "$GITHUB_STEP_SUMMARY"

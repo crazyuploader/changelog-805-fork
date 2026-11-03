@@ -1,0 +1,35 @@
+# Changelog entry. Write for users: what they saw, what changed, what to do.
+
+# One of: breaking, deprecation, feature, improvement, fix
+change_type:
+
+# The product area, from this repo's list (.chloggen/config.yaml).
+component:
+
+# One sentence a user understands. Quote it ("...") if it starts with a backtick.
+note:
+
+# (Optional) More lines under the note. Required for a deprecation: name the replacement.
+subtext:
+
+# This PR, quoted: ["#123"]. Unquoted, # starts a YAML comment.
+# Another SigNoz repo: ["SigNoz/signoz-otel-collector#962"]
+prs: []
+
+# (Optional) Earlier PRs this change builds on, same format.
+related: []
+
+# (Only in repos that set 'deployments') cloud, self-hosted or both.
+# deployment:
+
+# (Optional) https://signoz.io/docs/... Required when upgrade_stop is true.
+docs:
+
+# (Required for breaking) The steps a user takes before or after upgrading.
+breaking_steps:
+
+# (Optional) true for a security fix. The release owner can set it too.
+security: false
+
+# (Optional) true when users must stop at this version before any later one.
+upgrade_stop: false

@@ -1,0 +1,56 @@
+{{- define "entry" -}}
+- `{{ .Component }}`: {{ .Note }}{{ deploy . }} {{ refs . }}{{ if .Docs }} · [Docs]({{ .Docs }}){{ end }}
+{{- if .SubText }}
+{{ trim .SubText | indent 2 }}
+{{- end }}
+{{- if .BreakingSteps }}
+
+{{ printf "**What to do:** %s" (trim .BreakingSteps) | indent 2 }}
+{{- end }}
+{{- end -}}
+{{- define "section" -}}
+{{- range $i, $e := . }}
+{{ template "entry" $e }}
+{{- end }}
+{{- end -}}
+## {{ .Version }}
+{{- if .UpgradeGuide }}
+
+> **Mandatory upgrade stop.** Upgrade to {{ .Version }} before any later version.
+> Read the [upgrade guide]({{ .UpgradeGuide }}) first.
+{{- end }}
+{{- if .Security }}
+
+### Security
+
+This release fixes {{ if gt (len .Security) 1 }}security issues{{ else }}a security issue{{ end }}. Upgrade recommended.
+{{ range .Security }}
+- `{{ .Component }}`: {{ .Note }}{{ if eq .ChangeType "breaking" }} See Breaking changes for the steps.{{ end }} {{ refs . }}
+{{- end }}
+{{- end }}
+{{- if .Breaking }}
+
+### Breaking changes
+{{ template "section" .Breaking }}
+{{- end }}
+{{- if .Deprecated }}
+
+### Deprecated
+{{ template "section" .Deprecated }}
+{{- end }}
+{{- if .Added }}
+
+### Added
+{{ template "section" .Added }}
+{{- end }}
+{{- if .Changed }}
+
+### Changed
+{{ template "section" .Changed }}
+{{- end }}
+{{- if .Fixed }}
+
+### Fixed
+{{ template "section" .Fixed }}
+{{- end }}
+

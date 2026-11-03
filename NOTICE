@@ -1,0 +1,9 @@
+SigNoz changelog
+Copyright The SigNoz Authors
+
+This product is a fork of chloggen from opentelemetry-go-build-tools
+(https://github.com/open-telemetry/opentelemetry-go-build-tools), commit d90a13a.
+Copyright The OpenTelemetry Authors, licensed under the Apache License, Version 2.0.
+
+SigNoz changes: change types, entry fields, strict YAML keys, PR links,
+security and upgrade-stop sections, the 'next' command, and fixes for four bugs.

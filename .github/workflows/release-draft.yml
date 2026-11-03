@@ -1,0 +1,75 @@
+# Shared draft release. On push to main, when the commit is a merged release PR,
+# create a draft release whose body is the CHANGELOG section. A person clicks Publish,
+# and GitHub creates the tag then.
+name: release-draft
+
+on:
+  workflow_call:
+    inputs:
+      changelog-repo:
+        description: 'Repo of the changelog tool.'
+        required: false
+        default: 'SigNoz/changelog'
+        type: string
+      changelog-version:
+        description: 'Tag or commit SHA of the changelog tool.'
+        required: true
+        type: string
+      config:
+        required: false
+        default: '.chloggen/config.yaml'
+        type: string
+    secrets:
+      token:
+        description: 'primus-bot token, so that publishing starts the tag workflows. Default: GITHUB_TOKEN.'
+        required: false
+
+permissions: {}
+
+jobs:
+  draft:
+    runs-on: ubuntu-latest
+    if: "${{ startsWith(github.event.head_commit.message, 'chore(release): ') }}"
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+      GITHUB_TOKEN: ${{ secrets.token || github.token }}
+      CONFIG: ${{ inputs.config }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.changelog-repo }}
+          ref: ${{ inputs.changelog-version }}
+          path: .changelog-tool
+          persist-credentials: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: .changelog-tool/go.mod
+          cache: false
+
+      - name: install
+        run: |
+          go -C .changelog-tool build -o "$RUNNER_TEMP/bin/changelog" .
+          rm -rf .changelog-tool
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: draft
+        env:
+          MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          # "chore(release): v0.149.0 (#13300)" gives v0.149.0
+          version=$(head -n1 <<< "$MESSAGE" | sed -E 's/^chore\(release\): ([^ ]+).*/\1/')
+          changelog --config "$CONFIG" notes --version "$version" --target "$GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
+          if gh release view "$version" > /dev/null 2>&1; then
+            gh release edit "$version" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$version" --draft --target "$GITHUB_SHA" --title "$version" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
