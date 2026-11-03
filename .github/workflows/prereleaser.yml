@@ -94,7 +94,12 @@ jobs:
             --jq '[.[] | select(.title | startswith("chore(release): "))][0] // empty')
           if [[ "$REFRESH" == "true" ]]; then
             if [[ -z "$open" ]]; then echo "No open release PR. Nothing to refresh."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
-            version=$(jq -r '.title | sub("^chore\\(release\\): "; "")' <<< "$open")
+            current=$(jq -r '.title | sub("^chore\\(release\\): "; "")' <<< "$open")
+            # Recompute from main, but never go below the open PR's version: an owner may have typed a higher one.
+            next=$(changelog --config "$CONFIG" next) || next="$current"
+            version=$(printf '%s\n%s\n' "$current" "$next" | sort -V | tail -n1)
+            if [[ "$version" != "$current" ]]; then echo "New entries raise the version: ${current} to ${version}."; fi
+            echo "pr=$(jq -r .number <<< "$open")" >> "$GITHUB_OUTPUT"
           else
             if [[ -n "$open" ]]; then echo "Release PR #$(jq -r .number <<< "$open") is open. Merge or close it first."; exit 1; fi
             version="${INPUT_VERSION:-$(changelog --config "$CONFIG" next)}"
@@ -119,17 +124,18 @@ jobs:
         if: ${{ steps.version.outputs.skip != 'true' }}
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          REFRESH: ${{ inputs.refresh }}
+          PR: ${{ steps.version.outputs.pr }}
+          # One fixed branch: a PR cannot change its head, and a refresh may change the version.
+          BRANCH: changelog/release
         run: |
           set -euo pipefail
           git config user.name "primus-bot"
           git config user.email "primus-bot@users.noreply.github.com"
-          git checkout -B "release/${VERSION}"
+          git checkout -B "$BRANCH"
           git add -A
           git commit -m "chore(release): ${VERSION}"
           # Force: a refresh rebuilds the branch from main. The ruleset dismisses stale approvals.
-          git push --force origin "release/${VERSION}"
-          if [[ "$REFRESH" == "true" ]]; then echo "Refreshed the release PR for ${VERSION}."; exit 0; fi
+          git push --force origin "$BRANCH"
           cat > "$RUNNER_TEMP/body.md" <<BODY
           Writes the ${VERSION} section of CHANGELOG.md from the pending entries and deletes them.
 
@@ -140,5 +146,10 @@ jobs:
           - [ ] Minimum versions of other SigNoz services or tools are named
           - [ ] Mandatory upgrade stop: \`upgrade_stop: true\` set and the docs owner tagged (guide + upgradeSchema.json)
           BODY
-          gh pr create --base "$BASE" --head "release/${VERSION}" --title "chore(release): ${VERSION}" \
-            --label skip-changelog --body-file "$RUNNER_TEMP/body.md"
+          if [[ -n "$PR" ]]; then
+            gh pr edit "$PR" --title "chore(release): ${VERSION}" --body-file "$RUNNER_TEMP/body.md"
+            echo "Refreshed release PR #${PR} for ${VERSION}."
+          else
+            gh pr create --base "$BASE" --head "$BRANCH" --title "chore(release): ${VERSION}" \
+              --label skip-changelog --body-file "$RUNNER_TEMP/body.md"
+          fi
