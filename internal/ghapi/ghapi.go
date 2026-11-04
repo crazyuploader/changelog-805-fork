@@ -6,6 +6,7 @@ package ghapi
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -32,7 +33,7 @@ func FromEnv() *Client {
 	if base == "" {
 		base = "https://api.github.com"
 	}
-	return &Client{BaseURL: strings.TrimSuffix(base, "/"), Token: os.Getenv("GITHUB_TOKEN"), HTTP: &http.Client{Timeout: 15 * time.Second}}
+	return &Client{BaseURL: strings.TrimSuffix(base, "/"), Token: cmp.Or(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")), HTTP: &http.Client{Timeout: 15 * time.Second}}
 }
 
 // ErrNotFound means GitHub answered 404.
@@ -71,6 +72,27 @@ func (c *Client) do(ctx context.Context, method, path string, in, out any) error
 		return nil
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// CommitPR returns the number of the pull request that brought sha into repo, preferring a merged one.
+// It returns 0 when GitHub lists none.
+func (c *Client) CommitPR(ctx context.Context, repo, sha string) (int, error) {
+	var prs []struct {
+		Number   int     `json:"number"`
+		MergedAt *string `json:"merged_at"`
+	}
+	if err := c.do(ctx, http.MethodGet, fmt.Sprintf("/repos/%s/commits/%s/pulls", repo, sha), nil, &prs); err != nil {
+		return 0, err
+	}
+	for _, p := range prs {
+		if p.MergedAt != nil {
+			return p.Number, nil
+		}
+	}
+	if len(prs) > 0 {
+		return prs[0].Number, nil
+	}
+	return 0, nil
 }
 
 // PRExists reports whether repo has pull request n. It returns ErrNotFound when it does not.

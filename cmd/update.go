@@ -28,6 +28,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/SigNoz/changelog/internal/chlog"
+	"github.com/SigNoz/changelog/internal/ghapi"
 )
 
 const (
@@ -44,22 +45,37 @@ var (
 // squashSuffix matches the "(#123)" GitHub appends to a squash merge's subject.
 var squashSuffix = regexp.MustCompile(`\(#([0-9]+)\)$`)
 
-// fillPRs sets 'prs' on entries that leave it empty: the PR is read from the subject of the
-// commit that added the file. pr is the fallback for files not merged yet (the PR preview).
-// shortcut: squash merges only. A merge or rebase merge needs GET /repos/{r}/commits/{sha}/pulls.
-func fillPRs(cmd *cobra.Command, entries []*chlog.Entry, pr int) error {
+// fillPRs sets 'prs' on entries that leave it empty. It reads the commit that added the file:
+// first the "(#N)" a squash merge puts in its subject, then GitHub's list of PRs for that commit,
+// which also covers merge commits and rebase merges. pr is the last resort, for files not merged
+// yet (the PR preview).
+func fillPRs(cmd *cobra.Command, entries []*chlog.Entry, pr int, gh *ghapi.Client) error {
 	var errs error
 	for _, e := range entries {
 		if len(e.PRs) > 0 {
 			continue
 		}
-		out, err := exec.CommandContext(cmd.Context(), "git", "log", "--diff-filter=A", "--format=%s", "-1", "--", e.File).Output()
-		if m := squashSuffix.FindStringSubmatch(strings.TrimSpace(string(out))); err == nil && m != nil {
+		out, err := exec.CommandContext(cmd.Context(), "git", "log", "--diff-filter=A", "--format=%H%x09%s", "-1", "--", e.File).Output()
+		sha, subject, _ := strings.Cut(strings.TrimSpace(string(out)), "\t")
+		if m := squashSuffix.FindStringSubmatch(subject); err == nil && m != nil {
 			e.PRs = []string{"#" + m[1]}
-		} else if pr > 0 {
+			continue
+		}
+		var apiErr error
+		if err == nil && sha != "" && globalCfg.Repo != "" {
+			var n int
+			if n, apiErr = gh.CommitPR(cmd.Context(), globalCfg.Repo, sha); apiErr == nil && n > 0 {
+				e.PRs = []string{fmt.Sprintf("#%d", n)}
+				continue
+			}
+		}
+		switch {
+		case pr > 0:
 			e.PRs = []string{fmt.Sprintf("#%d", pr)}
-		} else {
-			errs = errors.Join(errs, fmt.Errorf("%s: no 'prs', and its commit names no PR. Set 'prs'", filepath.Base(e.File)))
+		case apiErr != nil:
+			errs = errors.Join(errs, fmt.Errorf("%s: no 'prs', and GitHub did not answer for its commit (%w). Rerun, or set 'prs'", filepath.Base(e.File), apiErr))
+		default:
+			errs = errors.Join(errs, fmt.Errorf("%s: no 'prs', and no PR brought its commit. Set 'prs'", filepath.Base(e.File)))
 		}
 	}
 	return errs
@@ -123,7 +139,7 @@ func updateCmd() *cobra.Command {
 					return fmt.Errorf("expected one instance of %s", insertPoint)
 				}
 
-				if err = fillPRs(cmd, entries, fallbackPR); err != nil {
+				if err = fillPRs(cmd, entries, fallbackPR, ghapi.FromEnv()); err != nil {
 					return err
 				}
 				// A fix released from a branch is already in the history. Do not repeat it, but delete its file.

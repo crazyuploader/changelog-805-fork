@@ -73,6 +73,7 @@ jobs:
       - name: preview
         if: ${{ always() }}
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           {

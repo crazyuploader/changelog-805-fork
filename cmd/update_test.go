@@ -4,6 +4,8 @@
 package cmd
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -199,6 +201,7 @@ func TestUpdateFillsPRsFromGit(t *testing.T) {
 		"merged.yaml":   noPR("Merged fix."),
 		"explicit.yaml": strings.Replace(entry("fix", "logs", "Ported fix."), `"#1"`, `"#5"`, 1),
 	})
+	commitPRs(t, "[]") // GitHub lists no PR for these commits
 	t.Chdir(root)
 	git := func(args ...string) {
 		t.Helper()
@@ -213,7 +216,7 @@ func TestUpdateFillsPRsFromGit(t *testing.T) {
 	git("commit", "-qm", "fix(logs): work in progress")
 
 	_, err := run("update", "--version", "v1.0.1", "--dry")
-	require.ErrorContains(t, err, "branch.yaml: no 'prs'")
+	require.ErrorContains(t, err, "branch.yaml: no 'prs', and no PR brought its commit")
 
 	out, err := run("update", "--version", "v1.0.1", "--dry", "--pr", "7")
 	require.NoError(t, err)
@@ -259,4 +262,32 @@ func TestUpdateRejectsBadVersion(t *testing.T) {
 		_, err := run("update", "--version", v)
 		require.ErrorContains(t, err, "is not vX.Y.Z", v)
 	}
+}
+
+// commitPRs points the GitHub client at a server that answers every commits/{sha}/pulls with body.
+func commitPRs(t *testing.T, body string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/pulls") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("GITHUB_API_URL", srv.URL)
+}
+
+// A merge commit or a rebase merge has no "(#N)" in its subject. GitHub's commit-to-PR list gives the
+// number, and a merged PR wins over an open one that also holds the commit.
+func TestUpdateFillsPRsFromGitHub(t *testing.T) {
+	root := setup(t, map[string]string{"merged.yaml": strings.Replace(entry("fix", "logs", "Merged fix."), `["#1"]`, `[]`, 1)})
+	commitPRs(t, `[{"number": 90, "merged_at": null}, {"number": 77, "merged_at": "2026-11-04T10:00:00Z"}]`)
+	t.Chdir(root)
+	out, err := exec.Command("sh", "-c", "git init -q && git add -A && git -c user.name=t -c user.email=t@t -c commit.gpgsign=false commit -qm 'Merge pull request from a branch'").CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	got, err := run("update", "--version", "v1.0.1", "--dry")
+	require.NoError(t, err)
+	require.Contains(t, got, "Merged fix. ([#77](https://github.com/SigNoz/signoz/pull/77))")
 }
