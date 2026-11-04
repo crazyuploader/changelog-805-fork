@@ -5,6 +5,7 @@ package cmd
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -188,4 +189,74 @@ func TestUpgradeStopBannerAndDeployment(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(got), "> **Mandatory upgrade stop.** Upgrade to v0.143.0 before any later version.\n> Read the [upgrade guide](https://signoz.io/docs/operate/migration/upgrade-0-143) first.")
 	require.Contains(t, string(got), "Login sessions use opaque tokens. [Self-Hosted] ([#1](https://github.com/SigNoz/signoz/pull/1)) · [Docs](https://signoz.io/docs/operate/migration/upgrade-0-143)")
+}
+
+// An entry with no 'prs' gets the number from the squash merge that added it.
+// A file not merged yet needs --pr (the PR preview), or update fails and names it.
+func TestUpdateFillsPRsFromGit(t *testing.T) {
+	noPR := func(note string) string { return strings.Replace(entry("fix", "logs", note), `["#1"]`, `[]`, 1) }
+	root := setup(t, map[string]string{
+		"merged.yaml":   noPR("Merged fix."),
+		"explicit.yaml": strings.Replace(entry("fix", "logs", "Ported fix."), `"#1"`, `"#5"`, 1),
+	})
+	t.Chdir(root)
+	git := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	git("init", "-q")
+	git("add", "-A")
+	git("commit", "-qm", "fix(logs): merged fix (#42)")
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".chloggen", "branch.yaml"), []byte(noPR("Branch fix.")), 0o600))
+	git("add", "-A")
+	git("commit", "-qm", "fix(logs): work in progress")
+
+	_, err := run("update", "--version", "v1.0.1", "--dry")
+	require.ErrorContains(t, err, "branch.yaml: no 'prs'")
+
+	out, err := run("update", "--version", "v1.0.1", "--dry", "--pr", "7")
+	require.NoError(t, err)
+	require.Contains(t, out, "Merged fix. ([#42](https://github.com/SigNoz/signoz/pull/42))")
+	require.Contains(t, out, "Branch fix. ([#7](https://github.com/SigNoz/signoz/pull/7))")
+	require.Contains(t, out, "Ported fix. ([#5](https://github.com/SigNoz/signoz/pull/5))")
+}
+
+// On release/v0.148, a newer v0.149.0 on main must not count: next gives v0.148.1,
+// and the compare link starts at v0.148.0.
+func TestReleaseBranchUsesItsOwnTags(t *testing.T) {
+	root := setup(t, map[string]string{"fix.yaml": entry("fix", "logs", "Branch fix.")})
+	t.Chdir(root)
+	t.Setenv("GITHUB_API_URL", "http://127.0.0.1:9") // GitHub down: notes still render
+	git := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"}, args...)...).CombinedOutput()
+		require.NoError(t, err, string(out))
+	}
+	git("init", "-q", "-b", "main")
+	git("add", "-A")
+	git("commit", "-qm", "base (#1)")
+	git("tag", "v0.148.0")
+	git("commit", "-q", "--allow-empty", "-m", "feature (#2)")
+	git("tag", "v0.149.0")
+	git("checkout", "-q", "-b", "release/v0.148", "v0.148.0")
+
+	out, err := run("next")
+	require.NoError(t, err)
+	require.Equal(t, "v0.148.1", strings.TrimSpace(out))
+
+	_, err = run("update", "--version", "v0.148.1")
+	require.NoError(t, err)
+	out, err = run("notes", "--version", "v0.148.1")
+	require.NoError(t, err)
+	require.Contains(t, out, "compare/v0.148.0...v0.148.1")
+}
+
+// A typo in the typed version must not become a tag.
+func TestUpdateRejectsBadVersion(t *testing.T) {
+	setup(t, map[string]string{"fix.yaml": entry("fix", "logs", "Fix.")})
+	for _, v := range []string{"v0.149", "0.149.0", "v0.149.0-rc.1"} {
+		_, err := run("update", "--version", v)
+		require.ErrorContains(t, err, "is not vX.Y.Z", v)
+	}
 }

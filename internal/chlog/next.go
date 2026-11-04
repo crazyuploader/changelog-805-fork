@@ -49,6 +49,12 @@ func NextVersion(tags []string, prefix, preOneFeature string, entries []*Entry) 
 
 // LatestStable returns the highest tag that is prefix plus X.Y.Z, skipping
 // prerelease tags and other release streams.
+// IsStable reports whether v is the prefix plus a stable version, such as v0.149.0.
+func IsStable(v, prefix string) bool {
+	rest, ok := strings.CutPrefix(v, prefix)
+	return ok && stableVersion.MatchString(rest)
+}
+
 func LatestStable(tags []string, prefix string) (string, error) {
 	var latest []int
 	var latestTag string

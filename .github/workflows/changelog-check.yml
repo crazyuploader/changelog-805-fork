@@ -19,7 +19,7 @@ on:
         default: '.chloggen/config.yaml'
         type: string
       skip-actors:
-        description: 'Comma-separated actors that need no entry.'
+        description: 'Comma-separated PR authors that need no entry. The author, not who ran the event: a maintainer who labels a Dependabot PR does not start the check.'
         required: false
         default: 'dependabot[bot],renovate[bot]'
         type: string
@@ -31,7 +31,7 @@ jobs:
     name: changelog
     runs-on: ubuntu-latest
     # In a merge queue the job is skipped, which counts as a pass. The PR already passed.
-    if: ${{ github.event_name == 'pull_request' && !contains(format(',{0},', inputs.skip-actors), format(',{0},', github.actor)) }}
+    if: ${{ github.event_name == 'pull_request' && !contains(format(',{0},', inputs.skip-actors), format(',{0},', github.event.pull_request.user.login)) }}
     permissions:
       contents: read
       pull-requests: read
@@ -72,9 +72,11 @@ jobs:
 
       - name: preview
         if: ${{ always() }}
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           {
             echo '## Release notes preview'
             echo
-            changelog --config "$CONFIG" update --dry --version next 2>&1 || true
+            changelog --config "$CONFIG" update --dry --version next --pr "$PR_NUMBER" 2>&1 || true
           } >> "$GITHUB_STEP_SUMMARY"

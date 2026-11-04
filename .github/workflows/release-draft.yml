@@ -67,9 +67,25 @@ jobs:
           set -euo pipefail
           # "chore(release): v0.149.0 (#13300)" gives v0.149.0
           version=$(head -n1 <<< "$MESSAGE" | sed -E 's/^chore\(release\): ([^ ]+).*/\1/')
+          if [[ ! "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::notice::'$version' is not a version, so this is not a release commit. No draft."
+            exit 0
+          fi
           changelog --config "$CONFIG" notes --version "$version" --target "$GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
-          if gh release view "$version" > /dev/null 2>&1; then
+          if draft=$(gh release view "$version" --json isDraft --jq .isDraft 2> /dev/null); then
+            # Never rewrite the body of a release people can already see.
+            if [[ "$draft" != "true" ]]; then echo "::error::${version} is already published. Not changing it."; exit 1; fi
             gh release edit "$version" --notes-file "$RUNNER_TEMP/notes.md"
           else
-            gh release create "$version" --draft --target "$GITHUB_SHA" --title "$version" --notes-file "$RUNNER_TEMP/notes.md"
+            # A fix release from release/vX.Y must not become Latest over a newer main release.
+            latest=true; [[ "$GITHUB_REF_NAME" == "main" ]] || latest=false
+            gh release create "$version" --draft --latest="$latest" --target "$GITHUB_SHA" --title "$version" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          # The release PR deletes every entry it renders. A file still here merged during the last refresh:
+          # its code is in this release, but its note is not. Add the line to the draft by hand.
+          dir=$(dirname "$CONFIG")
+          left=$(find "$dir" -maxdepth 1 -type f \( -name '*.yaml' -o -name '*.yml' \) \
+            ! -name "$(basename "$CONFIG")" ! -name 'TEMPLATE.yaml' -exec basename {} \; | sort | paste -sd, -)
+          if [[ -n "$left" ]]; then
+            echo "::warning::${version} ships code whose notes are not in the draft: ${left}. Add them to the draft before you publish. They stay pending for the next release."
           fi

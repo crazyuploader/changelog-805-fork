@@ -99,15 +99,17 @@ func (e Entry) Validate(cfg *config.Config) error {
 		add("specify a 'note'")
 	}
 
-	if len(e.PRs) == 0 {
-		add("specify one or more 'prs', such as \"#123\"")
-	}
 	for _, ref := range slices.Concat(e.PRs, e.Related) {
 		if !prRef.MatchString(ref) {
 			add("'%s' is not a PR reference. Use \"#123\" or \"SigNoz/<repo>#123\"", ref)
 			continue
 		}
-		if repo, _, _ := strings.Cut(ref, "#"); repo != "" && len(cfg.AllowedRepos) > 0 && !slices.Contains(cfg.AllowedRepos, repo) {
+		repo, _, _ := strings.Cut(ref, "#")
+		if strings.HasSuffix(repo, "-pod") {
+			add("'%s' is a private pod repo. Link only public SigNoz repos", ref)
+			continue
+		}
+		if repo != "" && len(cfg.AllowedRepos) > 0 && !slices.Contains(cfg.AllowedRepos, repo) {
 			add("'%s' names a repo outside 'allowed_repos' %v", ref, cfg.AllowedRepos)
 		}
 	}
@@ -173,7 +175,11 @@ func ReadEntries(cfg *config.Config) (map[string][]*Entry, error) {
 	if err != nil {
 		return nil, err
 	}
+	return ReadEntryFiles(cfg, yamlFiles)
+}
 
+// ReadEntryFiles reads the given entry files, keyed by changelog. It skips the template and the config.
+func ReadEntryFiles(cfg *config.Config, yamlFiles []string) (map[string][]*Entry, error) {
 	entries := make(map[string][]*Entry)
 	for key := range cfg.ChangeLogs {
 		entries[key] = make([]*Entry, 0)

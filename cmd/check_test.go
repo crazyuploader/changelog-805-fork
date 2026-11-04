@@ -53,11 +53,16 @@ func TestCheckPR(t *testing.T) {
 			files: []changedFile{{"A", ".chloggen/t.yaml"}}},
 		{name: "no entry", title: "feat(alerts): support telegram", wantErr: "adds no changelog entry"},
 		{name: "skip title", title: "chore(deps): bump x"},
+		{name: "refactor, style and build titles skip", title: "build(deps): Bump golang.org/x/net"},
+		{name: "perf needs an entry", title: "perf(logs): faster query", wantErr: "adds no changelog entry"},
+		{name: "revert needs an entry", title: "revert: feat(alerts): telegram", wantErr: "adds no changelog entry"},
 		{name: "breaking title never skips", title: "chore!: drop v1 api", wantErr: "'!' title is a breaking change"},
 		{name: "codegen title does not skip", title: "chore(codegen): regenerate", noSkip: `^chore\(codegen\)`, wantErr: "adds no changelog entry"},
 		{name: "hand edit with skip title", title: "docs: fix typo", files: []changedFile{{"M", "CHANGELOG.md"}}, wantErr: "written by the release PR"},
-		{name: "another PR's number", title: "feat: x", entries: map[string]string{"t.yaml": strings.Replace(good, `"#1"`, `"#7"`, 1)},
-			files: []changedFile{{"A", ".chloggen/t.yaml"}}, wantErr: `must include "#1"`},
+		{name: "no prs: update fills them in", title: "feat: x", entries: map[string]string{"t.yaml": strings.Replace(good, `["#1"]`, `[]`, 1)},
+			files: []changedFile{{"A", ".chloggen/t.yaml"}}},
+		{name: "explicit prs must exist", title: "feat: x", entries: map[string]string{"t.yaml": strings.Replace(good, `"#1"`, `"#404"`, 1)},
+			files: []changedFile{{"A", ".chloggen/t.yaml"}}, wantErr: "#404 is not a pull request"},
 		{name: "edit of an older entry keeps its PR", title: "fix: wording", entries: map[string]string{"t.yaml": strings.Replace(good, `"#1"`, `"#7"`, 1)},
 			files: []changedFile{{"M", ".chloggen/t.yaml"}}},
 		{name: "note copies the title", title: "feat(alerts): Send alert notifications to Telegram", entries: map[string]string{"t.yaml": good},
@@ -68,11 +73,18 @@ func TestCheckPR(t *testing.T) {
 			files: []changedFile{{"A", ".chloggen/t.yaml"}}, wantWarnings: 1},
 		{name: "invalid entry", title: "feat: x", entries: map[string]string{"t.yaml": entry("bug_fix", "alerts", "n")},
 			files: []changedFile{{"A", ".chloggen/t.yaml"}}, wantErr: "not a valid 'change_type'"},
+		{name: "a bad pending entry on main does not fail another PR", title: "feat: x",
+			entries: map[string]string{"t.yaml": good, "old.yaml": entry("fix", "traces", "Old."), "broken.yaml": "unknown_key: 1\n"},
+			files:   []changedFile{{"A", ".chloggen/t.yaml"}}},
+		{name: "a config change checks every pending entry", title: "chore: drop the traces component",
+			entries: map[string]string{"old.yaml": entry("fix", "traces", "Old.")},
+			files:   []changedFile{{"M", ".chloggen/config.yaml"}}, wantErr: "traces is not a valid 'component'"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			setup(t, tt.entries)
 			globalCfg.NoSkipTitlePattern = tt.noSkip
+			globalCfg.ConfigYAML = filepath.Join(globalCfg.EntriesDir, "config.yaml")
 			cmd := &cobra.Command{}
 			cmd.SetContext(context.Background())
 			res, err := checkPR(cmd, tt.files, 1, tt.title, fakeGitHub(t, "1", "7"))

@@ -33,7 +33,7 @@ func notesCmd() *cobra.Command {
 				return err
 			}
 			if prev == "" {
-				out, err := exec.CommandContext(cmd.Context(), "git", "tag", "--list", globalCfg.TagPrefix+"*").Output()
+				out, err := exec.CommandContext(cmd.Context(), "git", "tag", "--merged", "HEAD", "--list", globalCfg.TagPrefix+"*").Output()
 				if err != nil {
 					return fmt.Errorf("list git tags: %w", err)
 				}

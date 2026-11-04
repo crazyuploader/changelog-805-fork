@@ -35,7 +35,7 @@ const (
 	// DefaultChangeLogFilename is the default filename for the changelog.
 	DefaultChangeLogFilename = "CHANGELOG.md"
 	// DefaultSkipTitlePattern matches PR titles that need no entry. A '!' title never matches.
-	DefaultSkipTitlePattern = `^(chore|ci|test|docs)(\([^)]*\))?: `
+	DefaultSkipTitlePattern = `^(chore|ci|test|docs|refactor|style|build)(\([^)]*\))?: `
 )
 
 // Config represents the configuration for changelogs.

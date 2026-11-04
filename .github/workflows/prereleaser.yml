@@ -58,6 +58,8 @@ jobs:
       GH_TOKEN: ${{ secrets.token || github.token }}
       CONFIG: ${{ inputs.config }}
       BASE: ${{ inputs.base-branch }}
+      # One release branch per base, so a release from release/v0.148 never touches main's release PR.
+      RELEASE_BRANCH: ${{ inputs.base-branch == 'main' && 'changelog/release' || format('changelog/release-{0}', inputs.base-branch) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -90,8 +92,10 @@ jobs:
           REFRESH: ${{ inputs.refresh }}
         run: |
           set -euo pipefail
-          open=$(gh pr list --state open --base "$BASE" --label skip-changelog --json number,title \
-            --jq '[.[] | select(.title | startswith("chore(release): "))][0] // empty')
+          # The release PR is the one from the fixed branch. A port PR (chore(changelog): port ...) is not it.
+          # The label stops a fork PR from a branch with the same name, because only maintainers add it.
+          open=$(gh pr list --state open --base "$BASE" --head "$RELEASE_BRANCH" --label skip-changelog \
+            --json number,title --jq '.[0] // empty')
           if [[ "$REFRESH" == "true" ]]; then
             if [[ -z "$open" ]]; then echo "No open release PR. Nothing to refresh."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
             current=$(jq -r '.title | sub("^chore\\(release\\): "; "")' <<< "$open")
@@ -116,7 +120,13 @@ jobs:
           PREPARE: ${{ inputs.prepare-command }}
         run: |
           set -euo pipefail
-          changelog --config "$CONFIG" docs-check
+          # A missing guide does not stop the release PR: the PR is where the docs owner sees it.
+          # The PR body says "Do not merge" until a later refresh finds the page live.
+          if ! changelog --config "$CONFIG" docs-check > "$RUNNER_TEMP/docs.txt" 2>&1; then
+            echo "::warning::A docs page for a breaking or upgrade-stop entry is not live. The release PR lists it."
+          else
+            rm "$RUNNER_TEMP/docs.txt"
+          fi
           changelog --config "$CONFIG" update --version "$VERSION"
           if [[ -n "$PREPARE" ]]; then bash -c "$PREPARE"; fi
 
@@ -125,8 +135,8 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PR: ${{ steps.version.outputs.pr }}
-          # One fixed branch: a PR cannot change its head, and a refresh may change the version.
-          BRANCH: changelog/release
+          # One fixed branch per base: a PR cannot change its head, and a refresh may change the version.
+          BRANCH: ${{ env.RELEASE_BRANCH }}
         run: |
           set -euo pipefail
           git config user.name "primus-bot"
@@ -142,14 +152,30 @@ jobs:
           To change the notes, edit the entry files in a PR on ${BASE}. This PR rebuilds when it merges.
 
           - [ ] Weak notes rewritten: each says what users saw, what changed and what to do
-          - [ ] Security fixes have \`security: true\`
+          - [ ] Security fixes have \`security: true\`, including dependency bumps that close a Dependabot security alert (bots add no entry, so add one)
           - [ ] Minimum versions of other SigNoz services or tools are named
           - [ ] Mandatory upgrade stop: \`upgrade_stop: true\` set and the docs owner tagged (guide + upgradeSchema.json)
           BODY
+          if [[ -f "$RUNNER_TEMP/docs.txt" ]]; then
+            { printf '> [!WARNING]\n> Do not merge. These docs pages are not live yet. Publish them, and the next refresh removes this note.\n\n```\n'
+              grep -v '^PASS' "$RUNNER_TEMP/docs.txt"; printf '```\n\n'; cat "$RUNNER_TEMP/body.md"; } > "$RUNNER_TEMP/body2.md"
+            mv "$RUNNER_TEMP/body2.md" "$RUNNER_TEMP/body.md"
+          fi
           if [[ -n "$PR" ]]; then
             gh pr edit "$PR" --title "chore(release): ${VERSION}" --body-file "$RUNNER_TEMP/body.md"
             echo "Refreshed release PR #${PR} for ${VERSION}."
           else
+            # The label lifts the check on the release PR. Create it on a repo's first release.
+            gh label create skip-changelog --description "Needs no changelog entry" 2> /dev/null || true
             gh pr create --base "$BASE" --head "$BRANCH" --title "chore(release): ${VERSION}" \
               --label skip-changelog --body-file "$RUNNER_TEMP/body.md"
           fi
+
+      - name: notify
+        # A failed refresh leaves the open release PR behind main. Say so on the PR.
+        if: ${{ failure() && steps.version.outputs.pr != '' }}
+        env:
+          PR: ${{ steps.version.outputs.pr }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr comment "$PR" --body "The refresh from ${GITHUB_SHA::7} failed, so this PR may miss changes merged since. Fix it on ${BASE} and rerun: ${RUN_URL}"

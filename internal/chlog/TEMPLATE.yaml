@@ -12,8 +12,9 @@ note:
 # (Optional) More lines under the note. Required for a deprecation: name the replacement.
 subtext:
 
-# This PR, quoted: ["#123"]. Unquoted, # starts a YAML comment.
-# Another SigNoz repo: ["SigNoz/signoz-otel-collector#962"]
+# (Optional) Leave empty: the release fills in this PR's number from the merge commit.
+# Set it for a port of a fix from a release branch (the original PR), or for a change spread over
+# several PRs. Quoted: ["#123"]. Unquoted, # starts a YAML comment. Another repo: ["SigNoz/signoz-otel-collector#962"]
 prs: []
 
 # (Optional) Earlier PRs this change builds on, same format.

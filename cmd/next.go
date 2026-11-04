@@ -27,7 +27,8 @@ func nextCmd() *cobra.Command {
 			}
 
 			// CI needs the tags: checkout with fetch-depth: 0, or run git fetch --tags.
-			out, err := exec.CommandContext(cmd.Context(), "git", "tag", "--list", globalCfg.TagPrefix+"*").Output()
+			// Only tags in HEAD's history count, so on release/v0.148 a later v0.149.0 is ignored.
+			out, err := exec.CommandContext(cmd.Context(), "git", "tag", "--merged", "HEAD", "--list", globalCfg.TagPrefix+"*").Output()
 			if err != nil {
 				return fmt.Errorf("list git tags: %w", err)
 			}

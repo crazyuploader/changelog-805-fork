@@ -116,6 +116,16 @@ func checkPR(cmd *cobra.Command, files []changedFile, pr int, title string, gh *
 		}
 	}
 
+	// A config change, such as a removed component, can break any pending entry, so it checks them all.
+	configChanged := slices.ContainsFunc(files, func(f changedFile) bool { return f.path == rel(globalCfg.ConfigYAML) })
+	if configChanged {
+		all, err := chlog.ReadEntries(globalCfg)
+		if err == nil {
+			err = chlog.ValidateAll(globalCfg, all)
+		}
+		errs = errors.Join(errs, err)
+	}
+
 	skipTitle := !breakingTitle.MatchString(title) && regexp.MustCompile(globalCfg.SkipTitlePattern).MatchString(title) &&
 		(globalCfg.NoSkipTitlePattern == "" || !regexp.MustCompile(globalCfg.NoSkipTitlePattern).MatchString(title))
 	if len(touched) == 0 {
@@ -133,25 +143,22 @@ func checkPR(cmd *cobra.Command, files []changedFile, pr int, title string, gh *
 		return res, fmt.Errorf("this PR adds no changelog entry. %s", hint)
 	}
 
-	entriesByChangelog, err := chlog.ReadEntries(globalCfg)
+	// Read only this PR's entries, so a bad pending entry on main does not fail unrelated PRs.
+	entriesByChangelog, err := chlog.ReadEntryFiles(globalCfg, touched)
 	if err != nil {
 		return res, err
 	}
-	if err = chlog.ValidateAll(globalCfg, entriesByChangelog); err != nil {
-		errs = errors.Join(errs, err)
+	if !configChanged {
+		errs = errors.Join(errs, chlog.ValidateAll(globalCfg, entriesByChangelog))
 	}
 
 	own := fmt.Sprintf("#%d", pr)
-	sameRepo := fmt.Sprintf("%s#%d", globalCfg.Repo, pr)
 	plainTitle := normalize(titlePrefix.ReplaceAllString(title, ""))
 	for _, e := range chlog.Unique(entriesByChangelog) {
 		if !slices.Contains(touched, e.File) {
 			continue
 		}
 		name := filepath.Base(e.File)
-		if added(files, rel(e.File)) && !slices.Contains(e.PRs, own) && !slices.Contains(e.PRs, sameRepo) {
-			errs = errors.Join(errs, fmt.Errorf("%s: 'prs' must include \"%s\", this PR", name, own))
-		}
 		if plainTitle != "" && normalize(e.Note) == plainTitle {
 			errs = errors.Join(errs, fmt.Errorf("%s: 'note' copies the PR title. Say what users see and what changed", name))
 		}
@@ -177,10 +184,6 @@ func checkPR(cmd *cobra.Command, files []changedFile, pr int, title string, gh *
 	}
 	res.pass = fmt.Sprintf("%d entry file(s) checked", len(touched))
 	return res, nil
-}
-
-func added(files []changedFile, path string) bool {
-	return slices.Contains(files, changedFile{status: "A", path: path})
 }
 
 // normalize lowercases s and drops spaces and punctuation at the ends.
