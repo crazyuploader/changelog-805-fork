@@ -159,7 +159,7 @@ func updateCmd() *cobra.Command {
 				}
 
 				if dry {
-					cmd.Printf("Generated changelog updates for %s:", changeLogKey)
+					cmd.Printf("Generated changelog updates for %s:\n\n", changeLogKey)
 					cmd.Println(chlogUpdate)
 					continue
 				}
