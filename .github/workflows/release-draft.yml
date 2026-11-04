@@ -1,6 +1,7 @@
-# Shared draft release. On push to main, when the commit is a merged release PR,
+# Shared draft release. On push to main or release/**, when the commit is a merged release PR,
 # create a draft release whose body is the CHANGELOG section. A person clicks Publish,
-# and GitHub creates the tag then.
+# and GitHub creates the tag then. Run by hand with a version if the merge started no run.
+# On release published, keep Latest on the highest version.
 name: release-draft
 
 on:
@@ -19,6 +20,11 @@ on:
         required: false
         default: '.chloggen/config.yaml'
         type: string
+      version:
+        description: 'Run by hand: make the draft for this version, when the merge started no run.'
+        required: false
+        default: ''
+        type: string
     secrets:
       token:
         description: 'primus-bot token, so that publishing starts the tag workflows. Default: GITHUB_TOKEN.'
@@ -29,7 +35,7 @@ permissions: {}
 jobs:
   draft:
     runs-on: ubuntu-latest
-    if: "${{ startsWith(github.event.head_commit.message, 'chore(release): ') }}"
+    if: "${{ inputs.version != '' || startsWith(github.event.head_commit.message, 'chore(release): ') }}"
     permissions:
       contents: write
     env:
@@ -63,15 +69,29 @@ jobs:
       - name: draft
         env:
           MESSAGE: ${{ github.event.head_commit.message }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          # "chore(release): v0.149.0 (#13300)" gives v0.149.0
-          version=$(head -n1 <<< "$MESSAGE" | sed -E 's/^chore\(release\): ([^ ]+).*/\1/')
+          target="$GITHUB_SHA"
+          if [[ -n "$INPUT_VERSION" ]]; then
+            # By hand, such as after GitHub lost the merge's push event: find that release's merge commit.
+            version="$INPUT_VERSION"
+            git log --format='%H%x09%s' > "$RUNNER_TEMP/log.txt"
+            target=""
+            while IFS=$'\t' read -r sha subject; do
+              if [[ "$subject" == "chore(release): ${version}" || "$subject" == "chore(release): ${version} ("* ]]; then target="$sha"; break; fi
+            done < "$RUNNER_TEMP/log.txt"
+            if [[ -z "$target" ]]; then echo "::error::No 'chore(release): ${version}' commit on ${GITHUB_REF_NAME}."; exit 1; fi
+            git checkout -q "$target"
+          else
+            # "chore(release): v0.149.0 (#13300)" gives v0.149.0
+            version=$(head -n1 <<< "$MESSAGE" | sed -E 's/^chore\(release\): ([^ ]+).*/\1/')
+          fi
           if [[ ! "$version" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
             echo "::notice::'$version' is not a version, so this is not a release commit. No draft."
             exit 0
           fi
-          changelog --config "$CONFIG" notes --version "$version" --target "$GITHUB_SHA" > "$RUNNER_TEMP/notes.md"
+          changelog --config "$CONFIG" notes --version "$version" --target "$target" > "$RUNNER_TEMP/notes.md"
           if draft=$(gh release view "$version" --json isDraft --jq .isDraft 2> /dev/null); then
             # Never rewrite the body of a release people can already see.
             if [[ "$draft" != "true" ]]; then echo "::error::${version} is already published. Not changing it."; exit 1; fi
@@ -79,7 +99,7 @@ jobs:
           else
             # A fix release from release/vX.Y must not become Latest over a newer main release.
             latest=true; [[ "$GITHUB_REF_NAME" == "main" ]] || latest=false
-            gh release create "$version" --draft --latest="$latest" --target "$GITHUB_SHA" --title "$version" --notes-file "$RUNNER_TEMP/notes.md"
+            gh release create "$version" --draft --latest="$latest" --target "$target" --title "$version" --notes-file "$RUNNER_TEMP/notes.md"
           fi
           # The release PR deletes every entry it renders. A file still here merged during the last refresh:
           # its code is in this release, but its note is not. Add the line to the draft by hand.
@@ -88,4 +108,25 @@ jobs:
             ! -name "$(basename "$CONFIG")" ! -name 'TEMPLATE.yaml' -exec basename {} \; | sort | paste -sd, -)
           if [[ -n "$left" ]]; then
             echo "::warning::${version} ships code whose notes are not in the draft: ${left}. Add them to the draft before you publish. They stay pending for the next release."
+          fi
+
+  latest:
+    # Publishing marks a release Latest, even a fix from release/vX.Y. Put Latest back on the highest version.
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'release' }}
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.token || github.token }}
+      GH_REPO: ${{ github.repository }}
+      PUBLISHED: ${{ github.event.release.tag_name }}
+    steps:
+      - name: latest
+        run: |
+          set -euo pipefail
+          highest=$(gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName' \
+            | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          if [[ -n "$highest" && "$highest" != "$PUBLISHED" ]]; then
+            gh release edit "$highest" --latest
+            echo "::notice::${PUBLISHED} is not the highest release. Latest stays ${highest}."
           fi

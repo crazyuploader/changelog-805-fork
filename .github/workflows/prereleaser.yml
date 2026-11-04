@@ -99,11 +99,20 @@ jobs:
           if [[ "$REFRESH" == "true" ]]; then
             if [[ -z "$open" ]]; then echo "No open release PR. Nothing to refresh."; echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0; fi
             current=$(jq -r '.title | sub("^chore\\(release\\): "; "")' <<< "$open")
+            pr=$(jq -r .number <<< "$open")
             # Recompute from main, but never go below the open PR's version: an owner may have typed a higher one.
-            next=$(changelog --config "$CONFIG" next) || next="$current"
+            if ! next=$(changelog --config "$CONFIG" next 2> "$RUNNER_TEMP/next.err"); then
+              cat "$RUNNER_TEMP/next.err" >&2
+              if grep -q "nothing to release" "$RUNNER_TEMP/next.err"; then
+                # A port PR or a reverted entry removed the last one. An empty release PR helps nobody.
+                gh pr close "$pr" --delete-branch --comment "No pending entries are left on ${BASE}, so this release PR is closed. Run the prereleaser again when there is something to release."
+                echo "skip=true" >> "$GITHUB_OUTPUT"; exit 0
+              fi
+              next="$current"
+            fi
             version=$(printf '%s\n%s\n' "$current" "$next" | sort -V | tail -n1)
             if [[ "$version" != "$current" ]]; then echo "New entries raise the version: ${current} to ${version}."; fi
-            echo "pr=$(jq -r .number <<< "$open")" >> "$GITHUB_OUTPUT"
+            echo "pr=${pr}" >> "$GITHUB_OUTPUT"
           else
             if [[ -n "$open" ]]; then echo "Release PR #$(jq -r .number <<< "$open") is open. Merge or close it first."; exit 1; fi
             version="${INPUT_VERSION:-$(changelog --config "$CONFIG" next)}"
