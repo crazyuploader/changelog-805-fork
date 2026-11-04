@@ -159,7 +159,9 @@ func updateCmd() *cobra.Command {
 				}
 
 				if dry {
-					cmd.Printf("Generated changelog updates for %s:\n\n", changeLogKey)
+					if len(globalCfg.ChangeLogs) > 1 { // name the changelog only when there is more than one
+						cmd.Printf("Generated changelog updates for %s:\n\n", changeLogKey)
+					}
 					cmd.Println(chlogUpdate)
 					continue
 				}
