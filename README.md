@@ -9,3 +9,4 @@ at `d90a13a`. Apache-2.0, see `LICENSE` and `NOTICE`.
 [crazyuploader/changelog-805-e2e](https://github.com/crazyuploader/changelog-805-e2e) calls them.
 
 Commands: `new`, `validate`, `update`, `next`, `check`, `docs-check`, `notes`. Run `go test -race ./...`.
+fork guard test
