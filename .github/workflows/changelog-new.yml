@@ -1,0 +1,17 @@
+name: changelog-new
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [guard-base]
+
+permissions: {}
+
+jobs:
+  changelog:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/shiplog-check-new.yaml
+    with:
+      PRIMUS_REF: guard-base
